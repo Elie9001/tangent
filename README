@@ -1,0 +1,57 @@
+Writing sucks. No matter how you phrase an idea, you will always miss out on something or overwhelm your readers with too many details. This fundamental tradeoff leads to writers' block and decision fatigue. The root of this problem is that language is linear, but knowledge is complex and interconnected.
+
+This program lets you write in a whole new way. This "directed graph" model lets you explain an idea simply ''but also'' branch off into a huge world of details & nuances & subpoints, without breaking the flow at all.
+
+Think of it like a 'mind map' but much bigger and no constraints on space.
+
+==Usage==
+The program runs fullscreen like a video game. Hold F1 for basic instructions.
+* To add a new node, press N.
+* To connect two nodes, press C.
+* To disconnect two nodes, press D.
+* To edit a node's text, press E.
+* To ''select'' a node (or navigate the graph), left click.
+* To ''mark'' a node (for connecting, disconnecting, etc), press Spacebar.
+
+==Future plans==
+* I hope to make a web-app version, so anyone can make & view content without downloading this program.
+* Collaborative graphs - different users could add nodes to the same graph
+* Teleporter nodes - a node that opens another graph
+* Calculator nodes - a node that contains numbers, physical units, and academic citations. Calculations can be strung together to create a research paper.
+
+==Current limitations==
+* Maximum 8192 nodes per graph. If you find you suddenly can't add nodes, this is why.
+* Maximum 16384 connections per graph. If you find you suddenly can't connect nodes, this is why.
+* A connection can only be in one direction, not both, and not undirected.
+* There is no way to connect a node to itself.
+* Connections don't have labels.
+* Connections don't have weights.
+* There is no way to adjust the visual size of a node. This might make some nodes look awkwardly big or small. Each node's size is automatically determined by how much space is around it.
+* The 'Open' and 'Save' dialogs may act strange - for example on some systems, pressing 'enter' does nothing; you have to click the 'ok' button.
+* The 'Edit node' dialog can also be unreliable. If you edit the text, save it, then edit it more and save it again, it'll only update on the first save, not the second. Your later changes will be lost.
+* There are no menus to click on. Most interactions involve pressing keys on the keyboard. You'll have to memorize what each key does.
+* There is no undo/redo. Be careful what you delete.
+
+==System requirements==
+The program currently only runs on Linux. Your system needs to have the following packages installed:
+* GCC (GNU C compiler) with libraries: OpenGL and GLUT
+* zenity (for file selector)
+* leafpad (for editing node text)
+
+To build the program from source code, enter the folder and run 'make'.
+
+==Copyright==
+* Author: Elie Goldman Smith
+* Year: 2022
+* License: GNU General Public License
+
+==About==
+Version 0.5
+
+I make no guarantees on the quality of this program.
+* It could fail in potentially dangerous ways, even though I did my best to make it safe & secure.
+* I might make major changes in future versions, which could completely break any backwards compatiblilty.
+
+==Disclaimer==
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
