@@ -60,7 +60,8 @@ TQ_Drawable helpRender = {0};
 TQ_Drawable messageRender = {0};
 int messageTimeout = 0;
 
-TQ_Drawable dialogRender = {0};
+TQ_Drawable dialog1Render = {0};
+TQ_Drawable dialog4Render = {0};
 
 char filename[FILENAME_MAX]=""; // XXX: should it be FILENAME_MAX+1? if so, gotta change it other places too
 int isModified = 0;
@@ -376,7 +377,8 @@ void init() {
  #ifdef USE_MULTISAMPLING
  glLineWidth(1.5f);
  #endif
- dialogRender = tq_centered_fitted("Save changes to current file first?\nY-yes  N-no  C-cancel", 128.f, 128.f); // XXX: maybe have 2 different dialogs for 'open' vs 'quit'? Maybe write it differently i.e. "quit without saving"/"save and quit"/"cancel"?
+ dialog1Render = tq_centered_fitted("Save changes before opening another file?\nY-yes  N-no  C-cancel", 128.f, 128.f);
+ dialog4Render = tq_centered_fitted("Save changes before quitting?\nY-yes  N-no  C-cancel", 128.f, 128.f);
  message("Press/hold F1 for help\n");
 }
 
@@ -391,8 +393,13 @@ void draw() {
   glPushMatrix();
   glLoadIdentity();
   glScalef((1.f/128.f), (1.f/128.f)*_screen_x/_screen_y, 1.f);
-  tq_draw(dialogRender);
-  tq_draw(dialogRender); // TODO: instead of drawing twice, use high-contrast shader
+  if (state==1) { // for before opening another file:
+   tq_draw(dialog1Render);
+   tq_draw(dialog1Render);
+  } else {        // for before quitting:
+   tq_draw(dialog4Render);
+   tq_draw(dialog4Render);
+  }               // TODO: instead of drawing twice, use high-contrast shader
   glPopMatrix();
   glPopAttrib();
   if (keymap['Y']==KEY_FRESHLY_PRESSED) state += 1;
@@ -807,6 +814,7 @@ void done() {
  for (int i=0; i<nNodes; i++) eraseNodeText(i);
  tq_delete(&helpRender);
  tq_delete(&messageRender);
- tq_delete(&dialogRender);
+ tq_delete(&dialog1Render);
+ tq_delete(&dialog4Render);
  tq_done();
 }
