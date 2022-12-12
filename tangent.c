@@ -1,4 +1,6 @@
 /***
+ Tangent: Express your ideas as a directed graph
+
  Copyright 2022, Elie Goldman Smith
 
  This program is FREE SOFTWARE: you can redistribute it and/or modify
@@ -161,6 +163,7 @@ void message(const char *str) {
  tq_delete(&messageRender);
  messageRender = tq_line_centered(str);
  messageTimeout = 1000; // frames
+ // puts(str);
 }
 
 int message_printf(const char *fmt, ...) {
@@ -181,9 +184,9 @@ int message_printf(const char *fmt, ...) {
 
 
 
-void saveToFile(const char *filename) {
+int saveToFile(const char *filename) {
  FILE *f = fopen(filename,"w");
- if (!f) return; // TODO: handle error case
+ if (!f) {perror(filename); return 0;} // TODO: handle error case
  fprintf(f, "view:\nf=%d\nnodes:\n", focus);
  for (int i=0; i<nNodes; i++) {
   fprintf(f, "i=%d c=%02X%02X%02X t=\"", i, (int)nodes[i].r, (int)nodes[i].g, (int)nodes[i].b);
@@ -201,6 +204,8 @@ void saveToFile(const char *filename) {
  for (int i=0; i<nLinks; i++) fprintf(f, "a=%d b=%d\n", links[i].from, links[i].to);
  fclose(f);
  printf("Saved to file %s\n", filename);
+ isModified=0;
+ return 1; // XXX: do i really want it to return 1 on success and 0 on failure? loadFile() does this too. but it's very non-standard
 }
 
 void saveAs() {
@@ -213,8 +218,8 @@ void saveAs() {
    if (len>1) {
     fn[len-1] = 0; // to remove the newline
     strcpy(filename, fn);
-    saveToFile(filename);
-    message_printf("Saved to %s\n", filename);
+    if (saveToFile(filename)) message_printf("Saved to %s\n", filename);
+    else        message_printf(      "Couldn't save to %s\n", filename);
    }
    else puts("Empty filename");
   }
@@ -225,8 +230,8 @@ void saveAs() {
 void save() {
  if (!filename[0]) saveAs(); // untitled
  else {
-  saveToFile(filename);
-  message_printf("Saved to %s\n", filename);
+  if (saveToFile(filename)) message_printf("Saved to %s\n", filename);
+  else        message_printf(      "Couldn't save to %s\n", filename);
  }
 }
 
@@ -305,6 +310,7 @@ void drawCircle(float x, float y, float radius) {
 
 
 void editTextNode(int id) {
+ if (id<0) return;
  const char *editor_names[] = {"leafpad","defaulttexteditor","gedit","geany","notepad++","wordpad","notepad","nano","vim","vi","emacs",NULL};
  FILE *f = fopen(monitorFileName, "w");
  if (f) {
@@ -389,7 +395,6 @@ void draw() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   glPushAttrib(GL_ENABLE_BIT);
   tq_mode();
-  glColor3ub(255,255,255);
   glPushMatrix();
   glLoadIdentity();
   glScalef((1.f/128.f), (1.f/128.f)*_screen_x/_screen_y, 1.f);
@@ -562,7 +567,7 @@ void draw() {
   glPushMatrix();
   glLoadIdentity();
   glScalef(2.f/w, 2.f/h, 1.f);
-  glPushAttrib(GL_ENABLE_BIT); tq_mode(); glBlendEquation(GL_FUNC_ADD);
+  glPushAttrib(GL_ENABLE_BIT); tq_mode();
   glColor3f(1.f, 1.f, 0.f);
   tq_draw(helpRender);
   tq_draw(helpRender); // TODO: instead of drawing twice, use high-contrast shader
@@ -746,7 +751,6 @@ void draw() {
  
  // draw the text on the nodes
  glPushAttrib(GL_ENABLE_BIT); tq_mode();
- glColor3ub(255,255,255);
  for (int i=0; i<nRelevant; i++) {
   // filter out nodes with nothing to show
   if (r[i]->textRenders[0].n <= 0) continue;

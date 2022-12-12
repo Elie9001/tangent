@@ -92,8 +92,10 @@ void tq_mode() {
  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
  glEnable(GL_BLEND);
  glBlendFunc(GL_ONE, GL_ONE);
+ glBlendEquation(GL_FUNC_ADD);
  glEnableClientState(GL_VERTEX_ARRAY);
  glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+ glColor3ub(255,255,255);
 }
 
 
