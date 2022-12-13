@@ -32,6 +32,7 @@ typedef struct {
  float x,y;
  float dx,dy;
  float size;
+ float falloff;
  unsigned char r,g,b,a;
  char *text;
  int nTextLevels;
@@ -57,7 +58,7 @@ volatile struct timespec monitorFileTime = {0};
 volatile int             monitorEditNode = -1; // index of node being edited
 
 TQ_Drawable helpRender = {0};
-#define HELP_TEXT  "CONTROLS\n----\nN: new node\nE: edit text\nLeft Click: select node\nSPACE: mark node\nC: connect nodes\nD: disconnect nodes\nF: connect nodes but flipped\nINSERT: add intermediate node\nDELETE: delete current node\n+: new orphaned node\nCTRL-S: Save\nCTRL-O: Open\nT: show current filename\nESC: quit"
+#define HELP_TEXT  "CONTROLS\n----\nN: new node\nE: edit text\nLeft Click: select node\nSPACE: mark node\nC: connect nodes\nD: disconnect nodes\nF: swap 'select' vs 'mark'\nINSERT: add intermediate node\nDELETE: delete current node\n+: new orphaned node\nCTRL-S: Save\nCTRL-O: Open\nT: show current filename\nESC: quit"
 
 TQ_Drawable messageRender = {0};
 int messageTimeout = 0;
@@ -71,7 +72,7 @@ int isModified = 0;
 
 
 
-void addNodeFrom(int id) {
+void addNodeFrom(int id) { // XXX: maybe these functions should actually be where message() is called? Advantage: better feedback for the user - consider for example all the multiple exit points of connectNodes()
  if (nNodes >= MAXNODES) return;
  if (nLinks >= MAXLINKS) return;
  //focus=nNodes;
@@ -205,7 +206,7 @@ int saveToFile(const char *filename) {
  fclose(f);
  printf("Saved to file %s\n", filename);
  isModified=0;
- return 1; // XXX: do i really want it to return 1 on success and 0 on failure? loadFile() does this too. but it's very non-standard
+ return 1; // XXX: do i really want it to return 1 on success and 0 on failure? same for loadFile() - it's very non-standard
 }
 
 void saveAs() {
@@ -219,7 +220,7 @@ void saveAs() {
     fn[len-1] = 0; // to remove the newline
     strcpy(filename, fn);
     if (saveToFile(filename)) message_printf("Saved to %s\n", filename);
-    else        message_printf(      "Couldn't save to %s\n", filename);
+    else   message_printf(   "Failed: Couldn't save to %s\n", filename);
    }
    else puts("Empty filename");
   }
@@ -231,7 +232,7 @@ void save() {
  if (!filename[0]) saveAs(); // untitled
  else {
   if (saveToFile(filename)) message_printf("Saved to %s\n", filename);
-  else        message_printf(      "Couldn't save to %s\n", filename);
+  else   message_printf(   "Failed: Couldn't save to %s\n", filename);
  }
 }
 
@@ -288,9 +289,10 @@ int loadFile(const char *filename) { // TODO: respond more robustly (i.e. to avo
   }
   fclose(f);
   if (success) {
-   for (int i=0; i<nNodes; i++) genNodeTextRenders(i); // this is done at the end because it might need a lot of memory (fclose() would have freed some)
+   for (int i=0; i<nNodes; i++) genNodeTextRenders(i); // this is done here instead of earlier, because it might need a lot of memory. fclose() would have freed some
    printf("Opened file %s\n", filename);
-   isModified=0;
+   isModified = 0;
+   mark = toDrag = monitorEditNode = -1;
   } else printf("Invalid file %s\n", filename);
  } else perror(filename); // XXX: i dont like the inconsistancy of what goes to stdout vs stderr vs main screen. Also the inconsistancy of which functions are responsible for such printing (like what about the puts() calls in draw()). Need to decide on a proper schema for this.
  return success;
@@ -346,6 +348,7 @@ void *fileMonitor(void *ptr) { // pthread
     genNodeTextRenders(monitorEditNode);
     monitorFileTime = st.st_mtim;
     monitorEditNode = -1;
+    message("Edit was confirmed");
    }
   } sleep(1);
  }
@@ -357,7 +360,8 @@ void *fileMonitor(void *ptr) { // pthread
 
 
 
-
+//////////////////////////////////////////////////////
+// MAIN PROGRAM ENTRY POINTS: init(), draw(), done() :                         [see fullscreen_main.h for more details]
 
 void init() {
  tq_init(); glDisable(GL_TEXTURE_2D);
@@ -381,7 +385,7 @@ void init() {
  pthread_t fm; // file monitor thread (for editing a node)
  pthread_create(&fm,NULL,fileMonitor,NULL);
  #ifdef USE_MULTISAMPLING
- glLineWidth(1.5f);
+ glLineWidth(2.5f);
  #endif
  dialog1Render = tq_centered_fitted("Save changes before opening another file?\nY-yes  N-no  C-cancel", 128.f, 128.f);
  dialog4Render = tq_centered_fitted("Save changes before quitting?\nY-yes  N-no  C-cancel", 128.f, 128.f);
@@ -389,9 +393,13 @@ void init() {
 }
 
 
+
+
 void draw() {
- static int state=0;
- if (state==1 || state==4) { // The 'Save changes?' dialog:
+ static int state=0; // states: 0 = default behavior; 1 = asking whether to save changes before opening another file; 2 = answered yes; 3 = answered no; 4 = asking whether to save changes before quitting; 5 = answered yes; 6 = answered no
+
+ // The "Save changes?" dialogs only:
+ if (state==1 || state==4) {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   glPushAttrib(GL_ENABLE_BIT);
   tq_mode();
@@ -411,10 +419,10 @@ void draw() {
   if (keymap['N']==KEY_FRESHLY_PRESSED) state += 2;
   if (keymap['C']==KEY_FRESHLY_PRESSED) state = 0;
   if (keymap[ 27]==KEY_FRESHLY_PRESSED) state = 0;
-  return;
+  return; // Skip the rest of rendering etc.
  }
 
- //==User interface==
+ //==User input==
 
  // select node (Left click)
  if (_mouse_button_map[0]==KEY_FRESHLY_PRESSED) focus = nodeNearest(_mouse_x, _mouse_y);
@@ -430,22 +438,27 @@ void draw() {
 
  // mark current node (Spacebar)
  if (keymap[' ']==KEY_FRESHLY_PRESSED) {
-  if (mark == focus) mark = -1;
-  else mark = focus;
+  if (mark<0){ mark = focus; message("Marked - you can now go to another node and press C or D"); }
+  else       { mark = -1;    message("Unmarked"); }
  }
 
  // new node (N)
- if (keymap['N']==KEY_FRESHLY_PRESSED) { addNodeFrom(focus); isModified=1; }
+ if (keymap['N']==KEY_FRESHLY_PRESSED) { addNodeFrom(focus); isModified=1; message("New node added"); }
 
  // edit node text (E)
- if (keymap['E']==KEY_FRESHLY_PRESSED) { editTextNode(focus); isModified=1; }
+ if (keymap['E']==KEY_FRESHLY_PRESSED) { editTextNode(focus); isModified=1; message("Editing node text..."); }
 
- // connect/disconnect nodes (C for connect, F for connect flipped, D for disconnect)
- if (keymap['C']==KEY_FRESHLY_PRESSED) { connectNodes   (mark, focus); isModified=1; }
- if (keymap['D']==KEY_FRESHLY_PRESSED) { disconnectNodes(mark, focus); isModified=1; }
- if (keymap['F']==KEY_FRESHLY_PRESSED) { connectNodes   (focus, mark); isModified=1; }
+ // connect/disconnect nodes (C and D)
+ if (keymap['C']==KEY_FRESHLY_PRESSED && mark >= 0 && mark != focus) { connectNodes   (mark, focus); isModified=1; message("Connected");   }
+ if (keymap['D']==KEY_FRESHLY_PRESSED && mark >= 0 && mark != focus) { disconnectNodes(mark, focus); isModified=1; message("Disconnected");}
+ 
+ // swap 'focus' and 'mark' (F)
+ if (keymap['F']==KEY_FRESHLY_PRESSED && mark >= 0 && mark != focus) {
+  int f=focus; focus=mark; mark=f;
+  message("Flipped selection/mark");
+ }
 
- // insert node between (Insert)
+ // insert node between 'mark' and 'focus' (Insert)
  if (special_keymap[GLUT_KEY_INSERT]==KEY_FRESHLY_PRESSED && focus >= 0 && mark >= 0 && nNodes < MAXNODES) {
   int id = nNodes++;
   nodes[id].x = 0.5f*(nodes[mark].x + nodes[focus].x);
@@ -457,8 +470,9 @@ void draw() {
   disconnectNodes(mark, focus);
   connectNodes(mark, id);
   connectNodes(id, focus);
-  // focus = id;
+  //focus=id;
   isModified=1;
+  message("Added intermediary node");
  }
 
  // delete node (Delete)
@@ -466,6 +480,7 @@ void draw() {
   deleteNode(focus);
   focus = nodeNearest(0,0);
   isModified=1;
+  message("Deleted node");
  }
 
  // new orphaned node (+)
@@ -477,10 +492,11 @@ void draw() {
   focus = id;
   editTextNode(id);
   isModified=1;
+  message("New unconnected node: Editing text...");
  }
 
  // adjust node color (R,G,B; combined with '-' or '=')
- int colorDelta = 17 * (!!keymap['='] - !!keymap['-']);
+ int colorDelta = 5 * (!!keymap['='] - !!keymap['-']);
  if (colorDelta) {
   if (keymap['R']) {
    int l = nodes[focus].r + colorDelta;  if (l<0) l=0; else if (l>255) l=255;
@@ -494,17 +510,18 @@ void draw() {
    int l = nodes[focus].b + colorDelta;  if (l<0) l=0; else if (l>255) l=255;
    nodes[focus].b = l;                   isModified=1;
   }
+  message_printf("Node color: # %02X %02X %02X", nodes[focus].r, nodes[focus].g, nodes[focus].b); // XXX: since this is called at every frame (not just once per keystroke like the others are), would all the malloc() and free() involved in message_printf() and tq_line_centered()  eventually cause memory fragmentation?
  }
  
  // select a node using arrow keys
- static float selectorx = 0.f, selectory = 0.f;
+ static float selectorX = 0.f, selectorY = 0.f;
  if (special_keymap[GLUT_KEY_LEFT]||special_keymap[GLUT_KEY_RIGHT]||special_keymap[GLUT_KEY_DOWN]||special_keymap[GLUT_KEY_UP]) {
-  if (special_keymap[GLUT_KEY_LEFT ]) selectorx -= 0.02f;
-  if (special_keymap[GLUT_KEY_RIGHT]) selectorx += 0.02f;
-  if (special_keymap[GLUT_KEY_DOWN ]) selectory -= 0.02f;
-  if (special_keymap[GLUT_KEY_UP   ]) selectory += 0.02f;
-  focus = nodeNearest(selectorx, selectory);
- } else selectorx = selectory = 0.f; 
+  if (special_keymap[GLUT_KEY_LEFT ]) selectorX -= 0.02f;
+  if (special_keymap[GLUT_KEY_RIGHT]) selectorX += 0.02f;
+  if (special_keymap[GLUT_KEY_DOWN ]) selectorY -= 0.02f;
+  if (special_keymap[GLUT_KEY_UP   ]) selectorY += 0.02f;
+  focus = nodeNearest(selectorX, selectorY);
+ } else selectorX = selectorY = 0.f; 
 
  // adjust graph directionality (J)
  static float directionalityX = 0.f;
@@ -516,36 +533,37 @@ void draw() {
    directionalityX = 0.f;     directionalityY = 0.f;
    message("Flow directionality: None");
   }else if(d==1) {
-   directionalityX = 0.f;     directionalityY = -0.0004f;
+   directionalityX = 0.f;     directionalityY = -0.3f;
    message("Flow directionality: Down");
   }else if(d==2) {
-   directionalityX = 0.0004f; directionalityY = 0.f;
+   directionalityX = 0.3f; directionalityY = 0.f;
    message("Flow directionality: Right");
   }
  }
 
  // adjust bubble effect aka "space curvature" (K)
- static float bubbleEffect = 0.14f;
- static float relevanceRange = 4.f;
+ static float relevanceRange = 7.f;
  if (keymap['K']==KEY_FRESHLY_PRESSED) {
   static int b=1;
   if (++b > 2) b=0;
   if      (b==0) {
-   bubbleEffect = 0.00f;
-   relevanceRange= 12.f;
-   message("Bubble effect: None (flat)");
+   relevanceRange =19.f;
+   message("Bubble effect: Low");
   }else if(b==1) {
-   bubbleEffect = 0.14f;
-   relevanceRange = 4.f;
-   message("Bubble effect: Moderate");
+   relevanceRange = 7.f;
+   message("Bubble effect: Medium");
   }else if(b==2) {
-   bubbleEffect = 0.25f;
    relevanceRange = 3.f;
    message("Bubble effect: High");
   }
  }
- float mrr = (float)_screen_x/_screen_y + (float)_screen_y/_screen_x;
- if (relevanceRange < mrr) relevanceRange = mrr; // minimum relevance range for making sure nothing onscreen disappears
+ 
+ // toggle wobble (W)
+ static int wobble=1;
+ if (keymap['W']==KEY_FRESHLY_PRESSED) {
+  wobble = !wobble;
+  message_printf("Wobble: %s\n", wobble?"ON":"OFF");
+ }
 
 
  // help (F1)
@@ -635,31 +653,38 @@ void draw() {
    nodes[i].x += dx;
    nodes[i].y += dy;
   }
-  if (selectorx || selectory) { selectorx += dx; selectory += dy; }
+  if (selectorX || selectorY) { selectorX += dx; selectorY += dy; }
  }
  // establish which nodes are "relevant" aka potentially onscreen and able to repel other nodes
  static Node* r[MAXNODES];
  int nRelevant=0;
+ float inv = 1.f / relevanceRange;
  for (int i=0; i<nNodes; i++) {
-  if (nodes[i].x*nodes[i].x + nodes[i].y*nodes[i].y < relevanceRange) {
+  float f = 1.f - inv*(nodes[i].x*nodes[i].x + nodes[i].y*nodes[i].y);
+  if (f <= 0) nodes[i].falloff = nodes[i].size = 0;
+  else {
+   nodes[i].falloff = f*f*f;
+   nodes[i].size = 0.5f*f;
    r[nRelevant++] = &nodes[i];
-   nodes[i].size=0.5f;
   }
  }
  // apply bond forces
+ float strength = wobble? (keymap['Y'] ? 0.016f : 0.002f) : (keymap['Y'] ? 0.088f : 0.014f);
  for (int i=0; i<nLinks; i++) {
   float dx = nodes[links[i].to].x - nodes[links[i].from].x;
   float dy = nodes[links[i].to].y - nodes[links[i].from].y;
-  float inv = 0.002f / sqrtf(dx*dx+dy*dy+1.f);
+  float inv = strength / sqrtf(dx*dx+dy*dy+1.f);
   dx *= inv; dy *= inv;
-  dx -= directionalityX; // bias to make the graph flow in one direction slightly
-  dy -= directionalityY;
+  float f = nodes[links[i].from].falloff * nodes[links[i].to].falloff * strength;
+  dx -= directionalityX * f;
+  dy -= directionalityY * f;
   nodes[links[i].to  ].dx -= dx;
   nodes[links[i].to  ].dy -= dy;
   nodes[links[i].from].dx += dx;
   nodes[links[i].from].dy += dy;
  }
  // apply repel forces
+ strength = wobble? 0.00001f : 0.00007f;
  for (int h = 0; h<nRelevant; h++) {
   for (int i=h+1; i<nRelevant; i++) {
    float dx = r[i]->x - r[h]->x;
@@ -669,23 +694,37 @@ void draw() {
    if (r[i]->size > maxsize) r[i]->size = maxsize;
    if (maxsize < 0.0001f) { r[i]->x += RND()*0.0001f; r[i]->y += RND()*0.0001f; }
    float dsq = dx*dx+dy*dy;
-   float inv = 1.f/sqrtf(dsq + 0.01f); // for normalizing       (+ bias to avoid singularities)
-   inv *= 0.00001f*inv*inv - 0.000008f;// for inverse square law(+ bias to prevent orphaned nodes from drifting off to far)
-   float falloff = 1.f - bubbleEffect*(r[i]->x*r[i]->x + r[i]->y*r[i]->y + r[h]->x*r[h]->x + r[h]->y*r[h]->y); if(falloff<0.f)falloff=0.f; // XXX: would it maybe improve performance to move this to the start of the loop with: if(falloff<0.f)continue;
-   inv *= falloff*falloff;             // for clustering in distance
-   dx *= inv; dy *= inv;               // apply
+   float inv = 1.f/sqrtf(dsq + 0.01f);  // for normalizing       (+ bias to avoid singularities)
+   inv *= strength*inv*inv - strength;  // for inverse square law(+ bias to prevent orphaned nodes from drifting off to far)
+   inv *= r[h]->falloff * r[i]->falloff;// for clustering in distance
+   dx *= inv; dy *= inv;                // apply
    r[h]->dx -= dx;
    r[h]->dy -= dy;
    r[i]->dx += dx;
    r[i]->dy += dy;
   }
  }
+ // vibration (just for fun)
+ if (keymap['V']) {
+  for (int i=0; i<nNodes; i++) {
+   nodes[i].dx += RND()*0.004f;
+   nodes[i].dy += RND()*0.004f;
+  }
+ }
  // update positions
- for (int i=0; i<nNodes; i++) {
-  nodes[i].x += nodes[i].dx;
-  nodes[i].y += nodes[i].dy;
-  nodes[i].dx *= 0.9375f;
-  nodes[i].dy *= 0.9375f;
+ if (wobble) {
+  for (int i=0; i<nNodes; i++) {
+   nodes[i].x += nodes[i].dx;
+   nodes[i].y += nodes[i].dy;
+   nodes[i].dx *= 0.9375f;
+   nodes[i].dy *= 0.9375f;
+  }
+ } else {
+  for (int i=0; i<nNodes; i++) {
+   nodes[i].x += nodes[i].dx;
+   nodes[i].y += nodes[i].dy;
+   nodes[i].dx = nodes[i].dy = 0.f;
+  }
  }
 
 
@@ -697,7 +736,39 @@ void draw() {
  glLoadIdentity();
  glScalef((GLfloat)_screen_size/(GLfloat)_screen_x, (GLfloat)_screen_size/(GLfloat)_screen_y, 1.f);
 
+ // show the "potential connection" between mark and focus
+ if (mark >= 0 && focus >= 0) {
+  glColor3f(0.6f,0.0f,0.0f);
+  glBegin(GL_LINES);
+  glVertex2f(nodes[mark].x, nodes[mark].y);
+  glVertex2f(nodes[focus].x,nodes[focus].y);
+  glEnd();
+ }
+
  // draw the links
+ #ifdef USE_MULTISAMPLING
+ glBegin(GL_TRIANGLES);
+ glColor3f(0.7f, 0.7f, 0.7f);
+ for (int i=0; i<nLinks; i++) {
+  if (links[i].to >= 0 && links[i].from >= 0) {
+   float mx =(nodes[links[i].to].x + nodes[links[i].from].x)*0.5f;
+   float my =(nodes[links[i].to].y + nodes[links[i].from].y)*0.5f;
+   float dx = nodes[links[i].to].x - nodes[links[i].from].x;
+   float dy = nodes[links[i].to].y - nodes[links[i].from].y;
+   float norm = 0.01f / sqrtf(dx*dx + dy*dy);
+   dx *= norm; dy *= norm;
+   // main line
+   glVertex2f(nodes[links[i].from].x-dy*0.4f, nodes[links[i].from].y+dx*0.4f);
+   glVertex2f(nodes[links[i].from].x+dy*0.4f, nodes[links[i].from].y-dx*0.4f);
+   glVertex2f(nodes[links[i].to].x,      nodes[links[i].to].y);
+   // arrowhead at midpoint
+   glVertex2f(mx+dy-dx, my-dx-dy);
+   glVertex2f(mx   +dx, my   +dy);
+   glVertex2f(mx-dy-dx, my+dx-dy);
+  }
+ }
+ glEnd();
+ #else
  glBegin(GL_LINES);
  glColor3f(1.f,1.f,1.f);
  for (int i=0; i<nLinks; i++) {
@@ -705,14 +776,13 @@ void draw() {
    // main line
    glVertex2f(nodes[links[i].to  ].x, nodes[links[i].to  ].y);
    glVertex2f(nodes[links[i].from].x, nodes[links[i].from].y);
-   // add subtle chevron at the midpoint of the line, to indicate direction
+   // chevron at the midpoint of the line, to indicate direction
    float mx =(nodes[links[i].to].x + nodes[links[i].from].x)*0.5f;
    float my =(nodes[links[i].to].y + nodes[links[i].from].y)*0.5f;
    float dx = nodes[links[i].to].x - nodes[links[i].from].x;
    float dy = nodes[links[i].to].y - nodes[links[i].from].y;
    float norm = 0.007f / sqrtf(dx*dx + dy*dy);
-   dx *= norm;
-   dy *= norm;
+   dx *= norm; dy *= norm;
    glVertex2f(mx-dy-dx, my+dx-dy);
    glVertex2f(mx   +dx, my   +dy);
    glVertex2f(mx   +dx, my   +dy);
@@ -720,6 +790,7 @@ void draw() {
   }
  }
  glEnd();
+ #endif
 
  // precalculate screen boundaries
  float bx = _screen_x / _screen_size;
@@ -768,7 +839,7 @@ void draw() {
    // render
    glPushMatrix();
    glTranslatef(r[i]->x, r[i]->y, 0.f);
-   float scale = r[i]->size * 2.f / TEXT_BOX_SIZES[tl];
+   float scale = r[i]->size * 2.f / (TEXT_BOX_SIZES[tl]+0.08f);
    glScalef(scale, scale, 1.f);
    tq_draw(r[i]->textRenders[tl]);
    tq_draw(r[i]->textRenders[tl]); // TODO: instead of drawing twice, make a higher-contrast shader in text-quads.h
@@ -786,32 +857,31 @@ void draw() {
   glPopMatrix();
   messageTimeout--;
  }
- glPopAttrib();
+ glPopAttrib(); // done drawing text
 
  // highlight focused node
  if (focus >= 0) {
   glColor3f(1.0f, 1.0f, 0.0f);
   drawCircle(nodes[focus].x, nodes[focus].y, nodes[focus].size*(float)M_SQRT2);
  }
-
  // highlight marked node
  if (mark >= 0) {
-  glColor3f(1.0f, 0.0f, 0.0f);
+  glColor3f(1.0f, 0.2f, 0.0f);
   drawCircle(nodes[mark].x, nodes[mark].y, nodes[mark].size*(float)M_SQRT2);
  }
-
  // highlight node being edited
- if (mark >= 0) {
+ if (monitorEditNode >= 0) {
   glColor3f(0.5f, 0.0f, 1.0f);
   drawCircle(nodes[monitorEditNode].x, nodes[monitorEditNode].y, nodes[monitorEditNode].size*(float)M_SQRT2);
  }
-
  // selector
- if (selectorx || selectory) {
-  glColor3f(0.f, 1.f, 0.f);
-  drawCircle(selectorx, selectory, 0.02f);
+ if (selectorX || selectorY) {
+  glColor3f(0.0f, 1.0f, 0.0f);
+  drawCircle(selectorX, selectorY, 0.02f);
  }
 }
+
+
 
 
 void done() {
