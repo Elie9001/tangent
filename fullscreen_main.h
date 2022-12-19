@@ -87,17 +87,30 @@ GLfloat _screen_size = 8;
 
 #define KEY_FRESHLY_PRESSED 3
 
+unsigned _key_mod = 0;
 char keymap[256] = {0};
-#ifdef NO_ESCAPE
-void gcb_key_down(unsigned char key, int x, int y) { keymap[toupper(key)] = keymap[tolower(key)] = KEY_FRESHLY_PRESSED; }
-#else
-void gcb_key_down(unsigned char key, int x, int y) { keymap[toupper(key)] = keymap[tolower(key)] = KEY_FRESHLY_PRESSED; if (key == 27) exit(0); }
-#endif
-void gcb_key_up  (unsigned char key, int x, int y) { keymap[toupper(key)] = keymap[tolower(key)] = 0;} // XXX: toupper only works for letters, not numbers or punctuation. We should really do something more universal like keymap[shiftless(key)] and i would have to define the shiftless() function.
-
 char special_keymap[256] = {0};
-void gcb_special_key_down(int key, int x, int y) { special_keymap[(unsigned char)key] = KEY_FRESHLY_PRESSED; }
-void gcb_special_key_up  (int key, int x, int y) { special_keymap[(unsigned char)key] = 0; }
+
+// the 'gcb' prefix just stands for "glut call-back" function
+void gcb_key_down(unsigned char key, int x, int y) {
+ keymap[toupper(key)] = keymap[tolower(key)] = KEY_FRESHLY_PRESSED; // The toupper() and tolower() are to avoid a situation where, for example, the user holds 'shift', and then presses 'W', then releases the 'shift' and then releases the 'W' (which generates a lowercase 'w' keyup event instead).  XXX: This implementation still has some holes in it - for example numbers. We should really do something more universal like keymap[shift(key)] = keymap[shiftless(key)] = KEY_FRESHLY_PRESSED, but then we'd have to define the shift() and shiftless() functions, and they could get very complex if we want to support all locales.
+ #ifndef NO_ESCAPE
+ if (key == 27) exit(0);
+ #endif
+ _key_mod = glutGetModifiers();
+}
+void gcb_key_up  (unsigned char key, int x, int y) {
+ keymap[toupper(key)] = keymap[tolower(key)] = 0;
+ _key_mod = glutGetModifiers();
+}
+void gcb_special_key_down(int key, int x, int y) {
+ special_keymap[(unsigned char)key] = KEY_FRESHLY_PRESSED;
+ _key_mod = glutGetModifiers();
+}
+void gcb_special_key_up  (int key, int x, int y) {
+ special_keymap[(unsigned char)key] = 0;
+ _key_mod = glutGetModifiers();
+}
 
 #define keyboard_dz()     (!!keymap['W']-!!keymap['S']+!!special_keymap[GLUT_KEY_UP     ]-!!special_keymap[GLUT_KEY_DOWN     ]                            ) // forward/backward
 #define keyboard_dy()     (!!keymap['Q']-!!keymap['Z']+!!special_keymap[GLUT_KEY_PAGE_UP]-!!special_keymap[GLUT_KEY_PAGE_DOWN]+!!keymap['E']-!!keymap['C']) // jump/duck
@@ -137,6 +150,7 @@ void gcb_mouse_click(int button, int state, int x, int y) {
  if (button >= 0 && button < 8) _mouse_button_map[button] = (state==GLUT_DOWN)*KEY_FRESHLY_PRESSED;
  _mouse_x = (x - _screen_x/2) * 2.0f/_screen_size;
  _mouse_y = (y - _screen_y/2) *-2.0f/_screen_size;
+ _key_mod = glutGetModifiers();
 }
 
 void show_mouse() {
@@ -154,7 +168,6 @@ void hide_mouse() {
 
 
 
-// btw, my 'gcb' prefix just stands for "glut call-back function"
 void gcb_draw_frame()
 {
  draw();
@@ -266,9 +279,8 @@ int main(int argc, char **argv) {
 }
 
 /*
- // other input code that might be needed somewhere:
- int mod = glutGetModifiers();
- if (mod & GLUT_ACTIVE_SHIFT) {}
- if (mod & GLUT_ACTIVE_CTRL)  {}
- if (mod & GLUT_ACTIVE_ALT)   {}
+ // other client code you might need:
+ if (_key_mod & GLUT_ACTIVE_SHIFT) {}
+ if (_key_mod & GLUT_ACTIVE_CTRL)  {}
+ if (_key_mod & GLUT_ACTIVE_ALT)   {}
 */

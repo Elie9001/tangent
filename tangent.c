@@ -1,6 +1,7 @@
 /***
  Tangent: Express your ideas as a directed graph
 
+
  Copyright 2022, Elie Goldman Smith
 
  This program is FREE SOFTWARE: you can redistribute it and/or modify
@@ -25,15 +26,15 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define MAXTEXTLEVELS 7
-const float TEXT_BOX_SIZES[MAXTEXTLEVELS] = {3, 4, 5, 7, 9, 11, 14}; // in 'em' units
+#define MAXTEXTLEVELS 10
+const float TEXT_BOX_SIZES[MAXTEXTLEVELS] = {3, 4, 5, 7, 9, 11, 14, 17, 21, 26}; // in 'em' units
 
 typedef struct {
  float x,y;
  float dx,dy;
  float size;
  float falloff;
- unsigned char r,g,b,a;
+ unsigned char r,g,b,flags;
  char *text;
  int nTextLevels;
  TQ_Drawable textRenders[MAXTEXTLEVELS];
@@ -49,17 +50,18 @@ typedef struct {
 int nLinks=0;
 Link links[MAXLINKS];
 
-int focus = 0; // index of node that is in focus (selected as 1st node)
-int mark  =-1; // index of node that is marked   (selected as 2nd node)
-int toDrag=-1; // index of node being dragged during dragging
+int focus = 0; // index of node that is in focus
+int mark  =-1; // index of node that is marked
+int toDrag=-1; // index of node being dragged by mouse
 
 const    char *          monitorFileName = "/tmp/edit-text-node";
 volatile struct timespec monitorFileTime = {0};
 volatile int             monitorEditNode = -1; // index of node being edited
 
+#define HELP_TEXT  "CONTROLS\n----\nN: new node\nE: edit text\nLeft Click: select node\nSPACE: mark node\nC: connect nodes\nD: disconnect nodes\nF: swap 'select' vs 'mark'\nDELETE: delete current node\n+: new orphaned node\nCTRL-S: Save\nCTRL-O: Open\nT: show current filename\nESC: quit"
 TQ_Drawable helpRender = {0};
-#define HELP_TEXT  "CONTROLS\n----\nN: new node\nE: edit text\nLeft Click: select node\nSPACE: mark node\nC: connect nodes\nD: disconnect nodes\nF: swap 'select' vs 'mark'\nINSERT: add intermediate node\nDELETE: delete current node\n+: new orphaned node\nCTRL-S: Save\nCTRL-O: Open\nT: show current filename\nESC: quit"
 
+#define MESSAGE_TIMEOUT_NFRAMES 1000
 TQ_Drawable messageRender = {0};
 int messageTimeout = 0;
 
@@ -67,7 +69,9 @@ TQ_Drawable dialog1Render = {0};
 TQ_Drawable dialog4Render = {0};
 
 char filename[FILENAME_MAX]=""; // XXX: should it be FILENAME_MAX+1? if so, gotta change it other places too
-int isModified = 0;
+int isModified = 0; // boolean: are there unsaved changes.  TODO: update the window title with a star whenever isModified is set to true
+
+#define FLAG_MINIMAXED 1 // node flags
 
 
 
@@ -83,7 +87,6 @@ void addNodeFrom(int id) { // XXX: maybe these functions should actually be wher
  lum = nodes[id].r + (rand()&255)-128; if(lum<0)lum=0; if(lum>255)lum=255; nodes[nNodes].r = lum;
  lum = nodes[id].g + (rand()&255)-128; if(lum<0)lum=0; if(lum>255)lum=255; nodes[nNodes].g = lum;
  lum = nodes[id].b + (rand()&255)-128; if(lum<0)lum=0; if(lum>255)lum=255; nodes[nNodes].b = lum;
- nodes[nNodes].a = 255;
  links[nLinks].from = id;
  links[nLinks].to   = nNodes;
  nLinks++;
@@ -107,7 +110,7 @@ void disconnectNodes(int from, int to) {
  for (int i=0; i<nLinks; i++) {
   if ((links[i].to==to   && links[i].from==from)
   ||  (links[i].to==from && links[i].from==to)) {
-   links[i] = links[--nLinks];
+   links[i--] = links[--nLinks];
    return; // deleted connection (main case)
   }
  }
@@ -160,10 +163,11 @@ void genNodeTextRenders(int id) {
 
 
 
+
 void message(const char *str) {
  tq_delete(&messageRender);
  messageRender = tq_line_centered(str);
- messageTimeout = 1000; // frames
+ messageTimeout = MESSAGE_TIMEOUT_NFRAMES;
  // puts(str);
 }
 
@@ -181,6 +185,14 @@ int message_printf(const char *fmt, ...) {
  free(str);
  return n;
 }
+
+void drawCircle(float x, float y, float radius) {
+ glBegin(GL_LINE_LOOP);
+ float da=(float)M_PI/16.f;
+ for (float a = da*0.5f; a < (float)M_PI*2.f; a += da) glVertex2f(x + cosf(a)*radius, y + sinf(a)*radius);
+ glEnd();
+}
+
 
 
 
@@ -206,7 +218,8 @@ int saveToFile(const char *filename) {
  fclose(f);
  printf("Saved to file %s\n", filename);
  isModified=0;
- return 1; // XXX: do i really want it to return 1 on success and 0 on failure? same for loadFile() - it's very non-standard
+ glutSetWindowTitle(filename);
+ return 1; // XXX: do i really want it to return 1 on success and 0 on failure? same for loadFile() - it's very non-standard. Also it's kind of awkward that the 'filename' param is the same identifier as 'filename' global variable. There's some underlying inconsistancy about which function deals with what - I should probably think of a more maintainable schema.
 }
 
 void saveAs() {
@@ -255,7 +268,7 @@ int loadFile(const char *filename) { // TODO: respond more robustly (i.e. to avo
     int id; int r,g,b; char c;
     if (fscanf(f, "i=%d c=%02X%02X%02X t=\"", &id, &r, &g, &b)>0) {
      if (id >= 0 && id < MAXNODES) {
-      nodes[id].r=r; nodes[id].g=g; nodes[id].b=b; nodes[i].a=255;
+      nodes[id].r=r; nodes[id].g=g; nodes[id].b=b; nodes[i].flags=0; // TODO: decide how to fit 'flags' into the file format. probably f=XX, with 'XX' being hex digits. Also, don't forget to add 'isModified=1' to the 'M' keystroke afterwards.
       if (nNodes <= id) nNodes = id+1;
       size_t size;
       FILE *ss = open_memstream(&nodes[id].text, &size);
@@ -293,6 +306,7 @@ int loadFile(const char *filename) { // TODO: respond more robustly (i.e. to avo
    printf("Opened file %s\n", filename);
    isModified = 0;
    mark = toDrag = monitorEditNode = -1;
+   glutSetWindowTitle(filename);
   } else printf("Invalid file %s\n", filename);
  } else perror(filename); // XXX: i dont like the inconsistancy of what goes to stdout vs stderr vs main screen. Also the inconsistancy of which functions are responsible for such printing (like what about the puts() calls in draw()). Need to decide on a proper schema for this.
  return success;
@@ -301,19 +315,10 @@ int loadFile(const char *filename) { // TODO: respond more robustly (i.e. to avo
 
 
 
-void drawCircle(float x, float y, float radius) {
- glBegin(GL_LINE_LOOP);
- float da=(float)M_PI/16.f;
- for (float a = da*0.5f; a < (float)M_PI*2.f; a += da) glVertex2f(x + cosf(a)*radius, y + sinf(a)*radius);
- glEnd();
-}
-
-
-
 
 void editTextNode(int id) {
  if (id<0) return;
- const char *editor_names[] = {"leafpad","defaulttexteditor","gedit","geany","notepad++","wordpad","notepad","nano","vim","vi","emacs",NULL};
+ const char *editor_names[] = {"leafpad","defaulttexteditor","gedit","geany","kate","notepad++","notepad","wordpad","nano","pico","vim","vi","emacs",NULL};
  FILE *f = fopen(monitorFileName, "w");
  if (f) {
   if (nodes[id].text) fputs(nodes[id].text, f);
@@ -325,6 +330,7 @@ void editTextNode(int id) {
   if (fork()==0) {
    for (int i=0; editor_names[i]; i++) execlp(editor_names[0], editor_names[0], monitorFileName, (char*)NULL);
    printf("Can't edit node: No text editor found.\n");
+   exit(1);
   }
  }
  else {} // TODO: handle error case
@@ -348,7 +354,7 @@ void *fileMonitor(void *ptr) { // pthread
     genNodeTextRenders(monitorEditNode);
     monitorFileTime = st.st_mtim;
     monitorEditNode = -1;
-    message("Edit was confirmed");
+    message("Edit was confirmed - make sure you closed the text editor now.");
    }
   } sleep(1);
  }
@@ -379,7 +385,6 @@ void init() {
   nodes[nNodes].r = 255;
   nodes[nNodes].g = 255;
   nodes[nNodes].b = 255;
-  nodes[nNodes].a = 255;
   nNodes++;
  }
  pthread_t fm; // file monitor thread (for editing a node)
@@ -425,7 +430,13 @@ void draw() {
  //==User input==
 
  // select node (Left click)
- if (_mouse_button_map[0]==KEY_FRESHLY_PRESSED) focus = nodeNearest(_mouse_x, _mouse_y);
+ if (_mouse_button_map[0]==KEY_FRESHLY_PRESSED) {
+  int selected = nodeNearest(_mouse_x, _mouse_y);
+  if ((_key_mod & GLUT_ACTIVE_SHIFT)) { // shift+click
+   if (mark==selected) mark = -1;
+   else mark=selected;
+  } else focus = selected; // plain click
+ }
 
  // drag node (Right click)
  if (_mouse_button_map[2]==KEY_FRESHLY_PRESSED) toDrag = nodeNearest(_mouse_x, _mouse_y);
@@ -438,24 +449,52 @@ void draw() {
 
  // mark current node (Spacebar)
  if (keymap[' ']==KEY_FRESHLY_PRESSED) {
-  if (mark<0){ mark = focus; message("Marked - you can now go to another node and press C or D"); }
+  if (mark<0){ mark = focus; message("Marked current node"); }
   else       { mark = -1;    message("Unmarked"); }
  }
 
  // new node (N)
- if (keymap['N']==KEY_FRESHLY_PRESSED) { addNodeFrom(focus); isModified=1; message("New node added"); }
+ if (keymap['N']==KEY_FRESHLY_PRESSED) {
+  addNodeFrom(focus); isModified=1; message("New node added");
+  if ((_key_mod & GLUT_ACTIVE_SHIFT)) { // Shift+N
+   int f = links[nLinks-1].from;
+   links[nLinks-1].from = links[nLinks-1].to;
+   links[nLinks-1].to = f;
+  }
+ }
 
  // edit node text (E)
  if (keymap['E']==KEY_FRESHLY_PRESSED) { editTextNode(focus); isModified=1; message("Editing node text..."); }
 
- // connect/disconnect nodes (C and D)
- if (keymap['C']==KEY_FRESHLY_PRESSED && mark >= 0 && mark != focus) { connectNodes   (mark, focus); isModified=1; message("Connected");   }
- if (keymap['D']==KEY_FRESHLY_PRESSED && mark >= 0 && mark != focus) { disconnectNodes(mark, focus); isModified=1; message("Disconnected");}
+ // connect nodes (C)
+ if (keymap['C']==KEY_FRESHLY_PRESSED && mark >= 0 && mark != focus) {
+  if ((_key_mod & GLUT_ACTIVE_SHIFT)) connectNodes(mark, focus); // Shift+C
+  else connectNodes(focus, mark);
+  message("Connected");
+  isModified=1;
+ }
+
+ // disconnect nodes (D)
+ if (keymap['D']==KEY_FRESHLY_PRESSED && mark >= 0 && mark != focus)
+ {
+  if (keymap['C']) {// special behavior: hold C and press D: connect the two nodes but disconnect the mark from other nodes
+   for (int i=0; i<nLinks; i++) if (links[i].to==mark || links[i].from==mark) links[i--] = links[--nLinks];
+   message("Connected, and removed other connections");
+   connectNodes(focus, mark);
+  } else {          // default behavior: disconnect the two nodes:
+   disconnectNodes(focus, mark);
+   message("Disconnected");
+   isModified=1;
+  }
+ }
  
  // swap 'focus' and 'mark' (F)
  if (keymap['F']==KEY_FRESHLY_PRESSED && mark >= 0 && mark != focus) {
   int f=focus; focus=mark; mark=f;
-  message("Flipped selection/mark");
+  if ((_key_mod & GLUT_ACTIVE_SHIFT)) {
+   Node n=nodes[focus]; nodes[focus]=nodes[mark]; nodes[mark]=n;
+   message("Swapped the two nodes");
+  } else message("Flipped selection/mark");
  }
 
  // insert node between 'mark' and 'focus' (Insert)
@@ -466,10 +505,15 @@ void draw() {
   nodes[id].r = 0.5f*(nodes[mark].r + nodes[focus].r);
   nodes[id].g = 0.5f*(nodes[mark].g + nodes[focus].g);
   nodes[id].b = 0.5f*(nodes[mark].b + nodes[focus].b);
-  nodes[id].a = 0.5f*(nodes[mark].a + nodes[focus].a);
+  nodes[id].flags = FLAG_MINIMAXED;
   disconnectNodes(mark, focus);
-  connectNodes(mark, id);
-  connectNodes(id, focus);
+  if ((_key_mod & GLUT_ACTIVE_SHIFT)) {
+   connectNodes(mark, id);
+   connectNodes(id, focus);
+  } else {
+   connectNodes(focus, id);
+   connectNodes(id, mark);
+  }
   //focus=id;
   isModified=1;
   message("Added intermediary node");
@@ -488,7 +532,8 @@ void draw() {
   int id = nNodes++;
   nodes[id].x = _mouse_x;
   nodes[id].y = _mouse_y;
-  nodes[id].r = nodes[id].g = nodes[id].b = nodes[id].a = -1;
+  nodes[id].r = nodes[id].g = nodes[id].b = 255;
+  nodes[id].flags = 0;
   focus = id;
   editTextNode(id);
   isModified=1;
@@ -513,6 +558,13 @@ void draw() {
   message_printf("Node color: # %02X %02X %02X", nodes[focus].r, nodes[focus].g, nodes[focus].b); // XXX: since this is called at every frame (not just once per keystroke like the others are), would all the malloc() and free() involved in message_printf() and tq_line_centered()  eventually cause memory fragmentation?
  }
  
+ // set node size mode (M)
+ if (keymap['M']==KEY_FRESHLY_PRESSED) {
+  nodes[focus].flags ^= FLAG_MINIMAXED;
+  if ((nodes[focus].flags & FLAG_MINIMAXED)) message("Size: Minimum for most text");
+  else message("Size: Auto");
+ }
+ 
  // select a node using arrow keys
  static float selectorX = 0.f, selectorY = 0.f;
  if (special_keymap[GLUT_KEY_LEFT]||special_keymap[GLUT_KEY_RIGHT]||special_keymap[GLUT_KEY_DOWN]||special_keymap[GLUT_KEY_UP]) {
@@ -530,10 +582,10 @@ void draw() {
   static int d=0;
   if (++d > 2) d=0;
   if      (d==0) {
-   directionalityX = 0.f;     directionalityY = 0.f;
+   directionalityX = 0.f;  directionalityY = 0.f;
    message("Flow directionality: None");
   }else if(d==1) {
-   directionalityX = 0.f;     directionalityY = -0.3f;
+   directionalityX = 0.f;  directionalityY = -0.3f;
    message("Flow directionality: Down");
   }else if(d==2) {
    directionalityX = 0.3f; directionalityY = 0.f;
@@ -595,13 +647,13 @@ void draw() {
  }
 
  // save file (Ctrl-S or F5)
- if (keymap[19]==KEY_FRESHLY_PRESSED || (special_keymap[114] && keymap['S']==KEY_FRESHLY_PRESSED) || special_keymap[GLUT_KEY_F5]==KEY_FRESHLY_PRESSED) {
-  if (special_keymap[112] || special_keymap[113]) saveAs(); // Ctrl-Shift-S to force 'save as'
+ if (keymap[19]==KEY_FRESHLY_PRESSED || ((_key_mod & GLUT_ACTIVE_CTRL) && keymap['S']==KEY_FRESHLY_PRESSED) || special_keymap[GLUT_KEY_F5]==KEY_FRESHLY_PRESSED) {
+  if ((_key_mod & GLUT_ACTIVE_SHIFT)) saveAs(); // Ctrl-Shift-S to force 'save as'
   else save();
  }
 
  // load file (Ctrl-O or F6)
- if (keymap[15]==KEY_FRESHLY_PRESSED || (special_keymap[114] && keymap['O']==KEY_FRESHLY_PRESSED) || special_keymap[GLUT_KEY_F6]==KEY_FRESHLY_PRESSED) {
+ if (keymap[15]==KEY_FRESHLY_PRESSED || ((_key_mod & GLUT_ACTIVE_CTRL) && keymap['O']==KEY_FRESHLY_PRESSED) || special_keymap[GLUT_KEY_F6]==KEY_FRESHLY_PRESSED) {
   if (isModified)state = 1; // dialog
   else           state = 3; // bypass dialog
  }
@@ -627,12 +679,12 @@ void draw() {
   }
   state = 0;
  }
- 
+
  // show current filename (T)
  if (keymap['T']==KEY_FRESHLY_PRESSED) message_printf("%s%s", filename[0]?filename:"[untitled]", isModified?" (modified)":"");
 
- // quit (ESC)
- if (keymap[27]==KEY_FRESHLY_PRESSED) {
+ // quit (ESC or Ctrl-Q)
+ if (keymap[27]==KEY_FRESHLY_PRESSED || keymap[17]==KEY_FRESHLY_PRESSED || ((_key_mod & GLUT_ACTIVE_CTRL) && keymap['Q']==KEY_FRESHLY_PRESSED)) {
   if (isModified)state = 4; // dialog
   else           state = 6; // bypass dialog
  }
@@ -664,6 +716,7 @@ void draw() {
   if (f <= 0) nodes[i].falloff = nodes[i].size = 0;
   else {
    nodes[i].falloff = f*f*f;
+   if ((nodes[i].flags & FLAG_MINIMAXED)) nodes[i].falloff *= 0.2f * TEXT_BOX_SIZES[nodes[i].nTextLevels > 0 && nodes[i].textRenders[0].n > 0 ? nodes[i].nTextLevels-1 : 0];
    nodes[i].size = 0.5f*f;
    r[nRelevant++] = &nodes[i];
   }
@@ -730,6 +783,7 @@ void draw() {
 
  //==Rendering==
  glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+ const float FONT_SIZE = 0.017f; // (nominal minimum)
 
  // this projection matrix gives us "aspect-ratio-independent" normalized coordinates instead of the standard "normalized device coordinates"
  glMatrixMode(GL_PROJECTION);
@@ -750,18 +804,19 @@ void draw() {
  glBegin(GL_TRIANGLES);
  glColor3f(0.7f, 0.7f, 0.7f);
  for (int i=0; i<nLinks; i++) {
-  if (links[i].to >= 0 && links[i].from >= 0) {
-   float mx =(nodes[links[i].to].x + nodes[links[i].from].x)*0.5f;
-   float my =(nodes[links[i].to].y + nodes[links[i].from].y)*0.5f;
-   float dx = nodes[links[i].to].x - nodes[links[i].from].x;
-   float dy = nodes[links[i].to].y - nodes[links[i].from].y;
+  if (links[i].from >= 0 && links[i].to >= 0) {
+   Node *a = &nodes[links[i].from]; Node *b = &nodes[links[i].to];
+   float mx =(b->x + a->x)*0.5f;
+   float my =(b->y + a->y)*0.5f;
+   float dx = b->x - a->x;
+   float dy = b->y - a->y;
    float norm = 0.01f / sqrtf(dx*dx + dy*dy);
    dx *= norm; dy *= norm;
    // main line
-   glVertex2f(nodes[links[i].from].x-dy*0.4f, nodes[links[i].from].y+dx*0.4f);
-   glVertex2f(nodes[links[i].from].x+dy*0.4f, nodes[links[i].from].y-dx*0.4f);
-   glVertex2f(nodes[links[i].to].x,      nodes[links[i].to].y);
-   // arrowhead at midpoint
+   glVertex2f(a->x - dy*0.4f, a->y + dx*0.4f);
+   glVertex2f(a->x + dy*0.4f, a->y - dx*0.4f);
+   glVertex2f(b->x,           b->y);
+   // arrowhead at middle
    glVertex2f(mx+dy-dx, my-dx-dy);
    glVertex2f(mx   +dx, my   +dy);
    glVertex2f(mx-dy-dx, my+dx-dy);
@@ -772,17 +827,21 @@ void draw() {
  glBegin(GL_LINES);
  glColor3f(1.f,1.f,1.f);
  for (int i=0; i<nLinks; i++) {
-  if (links[i].to >= 0 && links[i].from >= 0) {
+  if (links[i].from >= 0 && links[i].to >= 0) {
+   Node *a = &nodes[links[i].from]; Node *b = &nodes[links[i].to];
    // main line
-   glVertex2f(nodes[links[i].to  ].x, nodes[links[i].to  ].y);
-   glVertex2f(nodes[links[i].from].x, nodes[links[i].from].y);
-   // chevron at the midpoint of the line, to indicate direction
-   float mx =(nodes[links[i].to].x + nodes[links[i].from].x)*0.5f;
-   float my =(nodes[links[i].to].y + nodes[links[i].from].y)*0.5f;
-   float dx = nodes[links[i].to].x - nodes[links[i].from].x;
-   float dy = nodes[links[i].to].y - nodes[links[i].from].y;
-   float norm = 0.007f / sqrtf(dx*dx + dy*dy);
-   dx *= norm; dy *= norm;
+   glVertex2f(a->x, a->y);
+   glVertex2f(b->x, b->y);
+   // chevron at the middle of the line, to indicate direction
+   float shift = 0.5f*(a->size - b->size);
+   float mx =(b->x + a->x)*0.5f;
+   float my =(b->y + a->y)*0.5f;
+   float dx = b->x - a->x;
+   float dy = b->y - a->y;
+   float norm = 1.f / sqrtf(dx*dx + dy*dy);
+   dx *= norm;     dy *= norm;
+   mx += dx*shift; my += dy*shift;
+   dx *= 0.007f;   dy *= 0.007f;
    glVertex2f(mx-dy-dx, my+dx-dy);
    glVertex2f(mx   +dx, my   +dy);
    glVertex2f(mx   +dx, my   +dy);
@@ -797,8 +856,12 @@ void draw() {
  float by = _screen_y / _screen_size;
 
  // draw the nodes
- for (int i=0; i<nRelevant; i++) { // this implementation uses Immediate Mode. XXX: instead of this, maybe use a vertex array with GL_POINTS, use point sprites with a shader that makes the rounded square shape?
+ for (int i=0; i<nRelevant; i++) { // this implementation uses Immediate Mode. XXX: instead of this, maybe use a vertex array with GL_POINTS, use point sprites with a shader that makes the rounded square shape? Then again, it might not be much faster, because the CPU still has to iterate through all the nodes anyway in other parts of the code.
   if (r[i]->size > 0) {
+   if ((r[i]->flags & FLAG_MINIMAXED)) {
+    float size = FONT_SIZE * ((r[i]->nTextLevels > 0 && r[i]->textRenders[0].n > 0) ? 0.5f*TEXT_BOX_SIZES[r[i]->nTextLevels-1] : 1.f) + 0.0001f;
+    if (size < r[i]->size*1.1f || r[i]==&nodes[focus]) r[i]->size = size;
+   }
    float x1 = r[i]->x-r[i]->size;
    float y1 = r[i]->y-r[i]->size;
    float x2 = r[i]->x+r[i]->size;
@@ -830,7 +893,6 @@ void draw() {
   if (r[i]->y - r[i]->size  >  by) continue;
   if (r[i]->y + r[i]->size  < -by) continue;
   // decide which textRender to use, if any.
-  const float FONT_SIZE = 0.017f; // (nominal minimum)
   int tl = r[i]->nTextLevels-1;
   while(tl >= 0 && TEXT_BOX_SIZES[tl]*FONT_SIZE*0.5f > r[i]->size) tl--;   // XXX: in cases where text is very short (say, 1 or 2 chars), this implementation hides the text too readily, because it's hiding based on nominal text size instead of actual text size. If I want to change this, I'd have to refactor text-quads.h::tq_centered_fitted() to also return data on how much scaling was done for making it "fitted".
   if   (tl >= 0) {
@@ -848,26 +910,29 @@ void draw() {
  }
  // draw any message text (top of screen)
  if (messageTimeout > 0) {
+  float lum = messageTimeout * (1.f / MESSAGE_TIMEOUT_NFRAMES);
+  glColor3f(lum*3.f, lum*2.f, lum);
   glBlendEquation(GL_FUNC_ADD);
-  glColor3f(messageTimeout*0.003f, messageTimeout*0.002f, messageTimeout*0.001f);
   glPushMatrix();
   glTranslatef(0.f, by-0.02f, 0.f);
   glScalef(0.04f, 0.04f, 1.f);
   tq_draw(messageRender);
+  tq_draw(messageRender); // TODO: instead of drawing twice, make a contrast shader
   glPopMatrix();
   messageTimeout--;
  }
  glPopAttrib(); // done drawing text
 
- // highlight focused node
- if (focus >= 0) {
-  glColor3f(1.0f, 1.0f, 0.0f);
-  drawCircle(nodes[focus].x, nodes[focus].y, nodes[focus].size*(float)M_SQRT2);
- }
  // highlight marked node
  if (mark >= 0) {
   glColor3f(1.0f, 0.2f, 0.0f);
   drawCircle(nodes[mark].x, nodes[mark].y, nodes[mark].size*(float)M_SQRT2);
+  drawCircle(nodes[mark].x, nodes[mark].y, nodes[mark].size*1.6f);
+ }
+ // highlight focused node
+ if (focus >= 0) {
+  glColor3f(1.0f, 1.0f, 0.0f);
+  drawCircle(nodes[focus].x, nodes[focus].y, nodes[focus].size*(float)M_SQRT2);
  }
  // highlight node being edited
  if (monitorEditNode >= 0) {
