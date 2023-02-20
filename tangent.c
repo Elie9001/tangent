@@ -77,8 +77,8 @@ int isModified = 0; // boolean: are there unsaved changes.  TODO: update the win
 
 
 void addNodeFrom(int id) { // XXX: maybe these functions should actually be where message() is called? Advantage: better feedback for the user - consider for example all the multiple exit points of connectNodes()
- if (nNodes >= MAXNODES) return;
- if (nLinks >= MAXLINKS) return;
+ if (nNodes >= MAXNODES) return; // message_printf("Max %d nodes", MAXNODES);
+ if (nLinks >= MAXLINKS) return; // message_printf("Max %d connections", MAXLINKS);
  //focus=nNodes;
  nodes[nNodes].x = _mouse_x;
  nodes[nNodes].y = _mouse_y;
@@ -153,11 +153,17 @@ void deleteNode(int id) {
 
 void genNodeTextRenders(int id) {
  int tl=0;
- while (tl<MAXTEXTLEVELS) {
+ while (tl<MAXTEXTLEVELS) { // generate:
   nodes[id].textRenders[tl++] = tq_centered_fitted(nodes[id].text, TEXT_BOX_SIZES[tl], TEXT_BOX_SIZES[tl]);
   if ((_tq_flags & TQ_FLAG_COMPLETE)) break;
  }
- nodes[id].nTextLevels = tl;
+ nodes[id].nTextLevels = tl; /*
+ for (int i=1; i<tl-1; i++) { // remove redundant levels:
+  if (nodes[id].textRenders[i-1].n >= nodes[id].textRenders[i].n) {
+   tq_delete(&nodes[id].textRenders[i]);
+   nodes[id].textRenders[i] = nodes[id].textRenders[i-1];
+  }
+ }*/
 }
 
 
@@ -370,7 +376,7 @@ void *fileMonitor(void *ptr) { // pthread
 // MAIN PROGRAM ENTRY POINTS: init(), draw(), done() :                         [see fullscreen_main.h for more details]
 
 void init() {
- tq_init(); glDisable(GL_TEXTURE_2D);
+ tq_init();
  show_mouse();
  memset(nodes, 0, sizeof(nodes)); // this also initializes any pointers to NULL, so it's safe to call free() on them at any time
  memset(links, -1,sizeof(links)); // -1 is safe, will be interpereted as 'not a link'
@@ -392,8 +398,8 @@ void init() {
  #ifdef USE_MULTISAMPLING
  glLineWidth(2.5f);
  #endif
- dialog1Render = tq_centered_fitted("Save changes before opening another file?\nY-yes  N-no  C-cancel", 128.f, 128.f);
- dialog4Render = tq_centered_fitted("Save changes before quitting?\nY-yes  N-no  C-cancel", 128.f, 128.f);
+ dialog1Render = tq_centered_fitted("Save changes before opening another file?\nS = Save     D = Don't save     C = Cancel", 128.f, 128.f);
+ dialog4Render = tq_centered_fitted("Save changes before quitting?\nS=Save   D=Don't save   C=Cancel", 128.f, 128.f);
  message("Press/hold F1 for help\n");
 }
 
@@ -405,7 +411,6 @@ void draw() {
 
  // The "Save changes?" dialogs only:
  if (state==1 || state==4) {
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   glPushAttrib(GL_ENABLE_BIT);
   tq_mode();
   glPushMatrix();
@@ -420,8 +425,8 @@ void draw() {
   }               // TODO: instead of drawing twice, use high-contrast shader
   glPopMatrix();
   glPopAttrib();
-  if (keymap['Y']==KEY_FRESHLY_PRESSED) state += 1;
-  if (keymap['N']==KEY_FRESHLY_PRESSED) state += 2;
+  if (keymap['S']==KEY_FRESHLY_PRESSED) state += 1;
+  if (keymap['D']==KEY_FRESHLY_PRESSED) state += 2;
   if (keymap['C']==KEY_FRESHLY_PRESSED) state = 0;
   if (keymap[ 27]==KEY_FRESHLY_PRESSED) state = 0;
   return; // Skip the rest of rendering etc.
@@ -572,7 +577,8 @@ void draw() {
   if (special_keymap[GLUT_KEY_RIGHT]) selectorX += 0.02f;
   if (special_keymap[GLUT_KEY_DOWN ]) selectorY -= 0.02f;
   if (special_keymap[GLUT_KEY_UP   ]) selectorY += 0.02f;
-  focus = nodeNearest(selectorX, selectorY);
+  int selected = nodeNearest(selectorX, selectorY);
+  if ((_key_mod & GLUT_ACTIVE_SHIFT)) mark = selected; else focus = selected;
  } else selectorX = selectorY = 0.f; 
 
  // adjust graph directionality (J)
@@ -633,7 +639,6 @@ void draw() {
     helpRender = tq_centered_fitted(HELP_TEXT, w, h);
    } while (!(_tq_flags & TQ_FLAG_COMPLETE));
   }
-  glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
   glPushMatrix();
   glLoadIdentity();
   glScalef(2.f/w, 2.f/h, 1.f);
@@ -722,7 +727,7 @@ void draw() {
   }
  }
  // apply bond forces
- float strength = wobble? (keymap['Y'] ? 0.016f : 0.002f) : (keymap['Y'] ? 0.088f : 0.014f);
+ float strength = wobble? (keymap['Y'] ? 0.022f : 0.002f) : (keymap['Y'] ? 0.088f : 0.014f);
  for (int i=0; i<nLinks; i++) {
   float dx = nodes[links[i].to].x - nodes[links[i].from].x;
   float dy = nodes[links[i].to].y - nodes[links[i].from].y;
@@ -738,6 +743,7 @@ void draw() {
  }
  // apply repel forces
  strength = wobble? 0.00001f : 0.00007f;
+ if (keymap['Z']) strength *= 9.f; // zoom
  for (int h = 0; h<nRelevant; h++) {
   for (int i=h+1; i<nRelevant; i++) {
    float dx = r[i]->x - r[h]->x;
@@ -748,7 +754,7 @@ void draw() {
    if (maxsize < 0.0001f) { r[i]->x += RND()*0.0001f; r[i]->y += RND()*0.0001f; }
    float dsq = dx*dx+dy*dy;
    float inv = 1.f/sqrtf(dsq + 0.01f);  // for normalizing       (+ bias to avoid singularities)
-   inv *= strength*inv*inv - strength;  // for inverse square law(+ bias to prevent orphaned nodes from drifting off to far)
+   inv *= strength*inv*(inv - 1.f);     // for inverse square law(- bias to prevent orphaned nodes from drifting off to far)
    inv *= r[h]->falloff * r[i]->falloff;// for clustering in distance
    dx *= inv; dy *= inv;                // apply
    r[h]->dx -= dx;
@@ -757,6 +763,26 @@ void draw() {
    r[i]->dy += dy;
   }
  }
+ #ifdef REPEL_ARROWHEADS
+ for (int h=0; h<nLinks; h++) {
+  float mx = 0.5f*(nodes[links[h].to].x + nodes[links[h].from].x);
+  float my = 0.5f*(nodes[links[h].to].y + nodes[links[h].from].y);
+  float f  = 1.0f - mx*mx - my*my;
+  if (f <= 0) continue;
+  f = f*f*f;
+  for (int i=0; i<nRelevant; i++) {
+   float dx = r[i]->x - mx;
+   float dy = r[i]->y - my;
+   float dsq = dx*dx+dy*dy;
+   float inv = 1.f/sqrtf(dsq + 0.01f);  // for normalizing       (+ bias to avoid singularities)
+   inv *= strength*inv*(inv - 1.f);     // for inverse square law(- bias to prevent orphaned nodes from drifting off to far)
+   inv *= r[i]->falloff * f;            // for clustering in distance
+   dx *= inv; dy *= inv;                // apply
+   r[i]->dx += dx;
+   r[i]->dy += dy; // TODO: to ensure conservation of momentum, also apply dx and dy to the arrowhead. Implementation: put dx and dy in the Link structure, add a final loop to apply 0.5*dx and 0.5*dy to the 'from' and 'to' nodes
+  }
+ }
+ #endif
  // vibration (just for fun)
  if (keymap['V']) {
   for (int i=0; i<nNodes; i++) {
@@ -782,7 +808,6 @@ void draw() {
 
 
  //==Rendering==
- glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
  const float FONT_SIZE = 0.017f; // (nominal minimum)
 
  // this projection matrix gives us "aspect-ratio-independent" normalized coordinates instead of the standard "normalized device coordinates"

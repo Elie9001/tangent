@@ -43,7 +43,6 @@ void tq_init() {
 
  // create font texture
  glGenTextures(1, &_tq_texture);
- glEnable(GL_TEXTURE_2D);
  glActiveTexture(GL_TEXTURE0);
  glBindTexture(GL_TEXTURE_2D, _tq_texture);
  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, TQ_TEXTURE_WIDTH, TQ_TEXTURE_HEIGHT-1, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, &bitmap[TQ_TEXTURE_WIDTH]); // we skip first row of bitmap because that's the indicator for where each character is.  XXX: maybe use a smaller internalformat? we really only need 4-bit monochrome

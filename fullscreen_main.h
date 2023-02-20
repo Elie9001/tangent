@@ -170,6 +170,12 @@ void hide_mouse() {
 
 void gcb_draw_frame()
 {
+ // clear any junk from the double buffer
+ glPushAttrib(GL_ENABLE_BIT); glDepthMask(GL_TRUE); glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+ glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+ glPopAttrib();
+
+ // render
  draw();
  if (_exit_the_program) exit(0);
 
@@ -242,11 +248,14 @@ int main(int argc, char **argv) {
  #ifdef USE_PRE_INIT
  pre_init();  if (_exit_the_program) return 1;
  #endif
- #ifdef USE_MULTISAMPLING
- glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_DEPTH | GLUT_MULTISAMPLE);
- #else
- glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_DEPTH);
+ glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE
+ #ifndef NO_DEPTH_BUFFER
+  | GLUT_DEPTH
  #endif
+ #ifdef USE_MULTISAMPLING
+  | GLUT_MULTISAMPLE
+ #endif
+ );
  glutInitWindowSize(256,144);
  glutInit(&argc, argv);
  glutCreateWindow("view");
